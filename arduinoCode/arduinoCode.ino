@@ -1,28 +1,29 @@
-// ----------------------
-// Basic Joystick Reader
-// ----------------------
-
-int joyX = A0;    // Joystick X-axis
-int joyY = A1;    // Joystick Y-axis
-int joyBtn = 2;   // Joystick pushbutton (active LOW)
+int FSRvalue, Flexvalue;
 
 void setup() {
-  Serial.begin(9600);
+  pinMode(10, OUTPUT);  // LED su pin PWM
+  pinMode(A0, INPUT);   // FSR
+  pinMode(A2, INPUT);   // Flex sensor
 
-  pinMode(joyBtn, INPUT_PULLUP);  // Button reads LOW when pressed
+  Serial.begin(115200); // << INDISPENSABILE per vedere i valori
 }
 
 void loop() {
-  int xVal = analogRead(joyX);    // 0–1023
-  int yVal = analogRead(joyY);    // 0–1023
-  int btn  = digitalRead(joyBtn); // 1 = not pressed, 0 = pressed
+  analogWrite(10, 100);  // Accende il LED a luminosità media
 
-  Serial.print("X: ");
-  Serial.print(xVal);
-  Serial.print(" | Y: ");
-  Serial.print(yVal);
-  Serial.print(" | Button: ");
-  Serial.println(btn == LOW ? "Pressed" : "Released");
+  FSRvalue  = analogRead(A0);
+  Flexvalue = analogRead(A2);
 
-  delay(100); // slow the output
+  // stampa i valori
+  serialPrint(FSRvalue, Flexvalue);
+
+  delay(50); // leggero delay
 }
+
+void serialPrint(int fsr, int flex) {
+  Serial.print("FSR: ");
+  Serial.print(fsr);
+  Serial.print("   Flex: ");
+  Serial.println(flex);
+}
+
