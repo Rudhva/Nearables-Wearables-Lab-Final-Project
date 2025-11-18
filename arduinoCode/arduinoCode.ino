@@ -1,11 +1,34 @@
 int FSRvalue, Flexvalue;
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+float ax_g, ay_g, az_g;
+float gx_dps, gy_dps, gz_dps;
+int x_val, y_val, button_state;
+
 
 void setup() {
   pinMode(10, OUTPUT);  // LED su pin PWM
-  pinMode(A0, INPUT);   // FSR
-  pinMode(A2, INPUT);   // Flex sensor
+  pinMode(A2, INPUT);   // FSR
+  pinMode(A4, INPUT);   // Flex sensor
+  pinMode(A0, INPUT);   // x coordinate 
+  pinMode(A1, INPUT);   // y coordinate
+  pinMode(D7, INPUT_PULLUP);   // joystick switch
 
-  Serial.begin(115200); // << INDISPENSABILE per vedere i valori
+
+  Serial.begin(115200); 
+  Wire.begin();
+
+  // Initialize MPU6050
+  Serial.println("Initializing MPU6050...");
+  mpu.initialize();
+
+  if (!mpu.testConnection()) {
+    Serial.println("Error: MPU6050 not connected!");
+    while (1);
+  }
+  Serial.println("MPU6050 connected.");
+
+  Serial.println("Setup successful.\n");
 }
 
 void loop() {
@@ -13,11 +36,21 @@ void loop() {
 
   FSRvalue  = analogRead(A0);
   Flexvalue = analogRead(A2);
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  ax_g = ax / 16384.0;
+  ay_g = ay / 16384.0;
+  az_g = az / 16384.0;
+  gx_dps = gx / 131.0;
+  gy_dps = gy / 131.0;
+  gz_dps = gz / 131.0;
+  x_val=analogRead(A0)
+  y_val=analogRead(A1);
+  button_state=digitalRead(D7);
 
   // stampa i valori
-  serialPrint(FSRvalue, Flexvalue);
+  serialPrint(FSRvalue, Flexvalue, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, x_val, y_val, button_state);
 
-  delay(50); // leggero delay
+  delay(50);
 }
 
 void serialPrint(int fsr, int flex) {
