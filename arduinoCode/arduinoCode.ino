@@ -7,7 +7,7 @@ int x_val, y_val, button_state;
 
 
 void setup() {
-  pinMode(10, OUTPUT);  // LED su pin PWM
+  pinMode(10, OUTPUT);  // LED on pin PWM
   pinMode(A2, INPUT);   // FSR
   pinMode(A4, INPUT);   // Flex sensor
   pinMode(A0, INPUT);   // x coordinate 
@@ -34,8 +34,8 @@ void setup() {
 void loop() {
   analogWrite(10, 100);  // Accende il LED a luminosità media
 
-  FSRvalue  = analogRead(A0);
-  Flexvalue = analogRead(A2);
+  FSRvalue  = analogRead(A2);
+  Flexvalue = analogRead(A4);
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
   ax_g = ax / 16384.0;
   ay_g = ay / 16384.0;
@@ -43,7 +43,7 @@ void loop() {
   gx_dps = gx / 131.0;
   gy_dps = gy / 131.0;
   gz_dps = gz / 131.0;
-  x_val=analogRead(A0)
+  x_val=analogRead(A0);
   y_val=analogRead(A1);
   button_state=digitalRead(D7);
 
@@ -77,5 +77,5 @@ void serialPrint(int fsr, int flex, float ax, float ay, float az,
   Serial.print(", ");
   Serial.print(y);
   Serial.print(", ");
-  Serial.println(button);
+  Serial.println(button_state);
 }
