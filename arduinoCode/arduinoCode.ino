@@ -53,10 +53,29 @@ void loop() {
   delay(50);
 }
 
-void serialPrint(int fsr, int flex) {
-  Serial.print("FSR: ");
-  Serial.print(fsr);
-  Serial.print("   Flex: ");
-  Serial.println(flex);
-}
+void serialPrint(int fsr, int flex, float ax, float ay, float az,
+                 float gx, float gy, float gz,
+                 int x, int y, int button_state) {
 
+  Serial.print(fsr);
+  Serial.print(", ");
+  Serial.print(flex);
+  Serial.print(", ");
+  Serial.print(ax);
+  Serial.print(", ");
+  Serial.print(ay);
+  Serial.print(", ");
+  Serial.print(az);
+  Serial.print(", ");
+  Serial.print(gx);
+  Serial.print(", ");
+  Serial.print(gy);
+  Serial.print(", ");
+  Serial.print(gz);
+  Serial.print(", ");
+  Serial.print(x);
+  Serial.print(", ");
+  Serial.print(y);
+  Serial.print(", ");
+  Serial.println(button);
+}
