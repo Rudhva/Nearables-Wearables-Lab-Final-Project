@@ -24,7 +24,8 @@ int[] camPixels = null;
 PImage previewFrame = null;
 PreviewWindow previewWin;
 Robot sysBot;
-Serial serialPort;
+Serial serialPrimary;
+Serial serialSecondary;
 
 color primaryDefault = color(0, 240, 140);    // bright green (pre-calibrated)
 color secondaryDefault = color(210, 90, 200); // magenta (pre-calibrated)
@@ -66,17 +67,27 @@ int playerMaxHits = 5;
 int botMaxHits = 5;
 
 // ---------- Control screen (serial + mouse/keyboard) ----------
-int SERIAL_PORT_INDEX = -1;
-boolean controlScreenEnabled = false;
+boolean controlScreenEnabled = true;
 boolean ctrl_w, ctrl_a, ctrl_s, ctrl_d, ctrl_space;
+boolean ctrl_up, ctrl_left, ctrl_down, ctrl_right, ctrl_enter;
 boolean mouseHeld = false;
-int fsrValue = 0;
-int flexValue = 0;
+int fsrPrimary = 0, flexPrimary = 0;
+int fsrSecondary = 0, flexSecondary = 0;
 int lastFlexLogMs = 0;
-int joyX = 0, joyY = 0;
+int joyXPrimary = 0, joyYPrimary = 0;
+int joyXSecondary = 0, joyYSecondary = 0;
 int joyDeadZone = 120;
-int mouseClickThreshold = 80;
+int mouseClickThreshold = 800;
 int fsrSpaceThreshold = 800;
+int fsrEnterThreshold = 800;
+float gyroXPrimary = 0, gyroYPrimary = 0, gyroZPrimary = 0;
+float gyroXSecondary = 0, gyroYSecondary = 0, gyroZSecondary = 0;
+float gyroTurretDeadband = 10;   // dps before we rotate turret
+float gyroTurretScale = 0.002;  // angle delta per frame per dps
+float gyroTurretSpinStep = 0.05; // angle delta per frame when past deadband
+float gyroZeroPrimaryZ = 0, gyroZeroSecondaryZ = 0;
+boolean gyroZeroedPrimary = false, gyroZeroedSecondary = false;
+float gyroZPrimaryAdj = 0, gyroZSecondaryAdj = 0;
 
 void settings() {
   size(int(CAM_W * WIN_SCALE), int(CAM_H * WIN_SCALE));
@@ -89,6 +100,9 @@ void setup() {
   startPreviewWindow();
   startTrackingThreads();
   setupRobot();
+  setupSerial();
+  gyroZeroedPrimary = gyroZeroedSecondary = false;
+  gyroZeroPrimaryZ = gyroZeroSecondaryZ = 0;
 
   calibPosA = new PVector(width * 0.33, height * 0.5);
   calibPosB = new PVector(width * 0.67, height * 0.5);
@@ -181,20 +195,32 @@ void drawHome() {
   drawBanner("Nearables / Wearables Lab", "Calibrate → choose players → pick a mode. Camera preview is in its own window.");
   //disableControlMode(); // safety when leaving control screen
 
+  // Player count toggle on home
+  float toggleY = 120;
+  if (renderButton("1 Player (vs CPU)", 40, toggleY, 220, 36)) {
+    playerCount = 1;
+  }
+  if (renderButton("2 Players (both humans)", 280, toggleY, 240, 36)) {
+    playerCount = 2;
+  }
+  fill(180);
+  textAlign(LEFT, CENTER);
+  text("Current: " + (playerCount == 1 ? "Solo" : "Two players"), 540, toggleY + 18);
+
   // menu grid
   float cardW = (width - 100) / 2;
   float cardH = 90;
-  drawDifficultyRow(40, 150);
-  if (renderCard("Calibrate Colors", "Lock colors + choose 1P/2P", 40, 190, cardW, cardH)) screen = SCREEN_CALIB;
-  if (renderCard("Therapy Maze", "Track dot through maze", 60 + cardW, 190, cardW, cardH)) startTherapyRun();
-  if (renderCard("Shape Battle", "Tanks + bullets", 40, 190 + cardH + 20, cardW, cardH)) {
+  drawDifficultyRow(40, 170);
+  if (renderCard("Calibrate Colors", "Lock colors + choose 1P/2P", 40, 210, cardW, cardH)) screen = SCREEN_CALIB;
+  if (renderCard("Therapy Maze", "Track dot through maze", 60 + cardW, 210, cardW, cardH)) startTherapyRun();
+  if (renderCard("Shape Battle", "Tanks + bullets", 40, 210 + cardH + 20, cardW, cardH)) {
     resetShapeGame();
     screen = SCREEN_SHAPE;
   }
-  if (renderCard("Serial Control", "Camera mouse + joystick keys", 60 + cardW, 190 + cardH + 20, cardW, cardH)) {
+  if (renderCard("Serial Control", "Camera mouse + joystick keys", 60 + cardW, 210 + cardH + 20, cardW, cardH)) {
     screen = SCREEN_CONTROL;
   }
-  if (renderCard("Quit", "Close app", 40, 190 + (cardH + 20) * 2, cardW, cardH)) exit();
+  if (renderCard("Quit", "Close app", 40, 210 + (cardH + 20) * 2, cardW, cardH)) exit();
 }
 
 void drawCalibration() {
@@ -212,17 +238,6 @@ void drawCalibration() {
   textSize(14);
   text("1) Choose player count. 2) Place colors in circles. 3) Press 1 for primary, 2 for secondary (only if 2 players). 4) ENTER/Continue to start. Camera preview is in its own window.", 30, 60, width - 60, 80);
 
-  // Player count toggle
-  float toggleY = 170;
-  if (renderButton("1 Player (vs CPU)", 30, toggleY, 220, 36)) {
-    playerCount = 1;
-  }
-  if (renderButton("2 Players (both humans)", 270, toggleY, 240, 36)) {
-    playerCount = 2;
-  }
-  fill(180);
-  text("Current: " + (playerCount == 1 ? "Solo" : "Two players"), 30, toggleY + 44);
-
   drawCalibCrosshair(calibPosA, primaryDefault);
   drawCalibCrosshair(calibPosB, secondaryDefault);
 
@@ -233,6 +248,11 @@ void drawCalibration() {
   // Color swatches + status
   drawColorSwatch("Primary", trackerA.target, trackerA.found, 30, height - 140);
   drawColorSwatch("Secondary", trackerB.target, trackerB.found && playerCount > 1, 230, height - 140);
+
+  // Allow swapping which color is primary/secondary
+  if (renderButton("Swap primary/secondary", width - 280, 170, 240, 36)) {
+    flipPrimarySecondary();
+  }
 
   float btnY = height - 70;
   if (renderButton("Back", 24, btnY, 160, 44)) {
@@ -405,7 +425,7 @@ void drawShapeOver() {
 
 void drawControlScreen() {
   drawBackdrop();
-  drawBanner("Serial Control", "Primary color moves mouse. Joy remap: X>800→W, X<250→S, Y>800→D, Y<250→A. Flex clicks; FSR = SPACE. STOP toggles safety.");
+  drawBanner("Serial Control", "Primary device (primary color) drives mouse + WASD/SPACE. Secondary device drives arrows/ENTER only. Joy remap: X>800→W, X<250→S, Y>800→D, Y<250→A.");
 
   fill(0, 0, 0, 140);
   noStroke();
@@ -413,9 +433,10 @@ void drawControlScreen() {
   fill(255);
   textAlign(LEFT, TOP);
   textSize(16);
-  text("Status: " + (controlScreenEnabled ? "ENABLED" : "DISABLED") + "  |  Serial: " + (serialPort == null ? "not connected" : "ok"), 60, 140);
+  String serialStatus = "P:" + (serialPrimary != null ? "ok" : "none") + "  S:" + (serialSecondary != null ? "ok" : "none");
+  text("Status: " + (controlScreenEnabled ? "ENABLED" : "DISABLED") + "  |  Serial: " + serialStatus, 60, 140);
   textSize(14);
-  text("Mouse follows primary color across the screen. Flex > " + mouseClickThreshold + " = mouse click. FSR > " + fsrSpaceThreshold + " = SPACE. Hit STOP anytime.", 60, 168, width - 120, 60);
+  text("Primary: mouse + WASD, Flex > " + mouseClickThreshold + " = mouse click, FSR > " + fsrSpaceThreshold + " = SPACE. Secondary: arrows, FSR > " + fsrEnterThreshold + " = ENTER; flex also counts for click if devices swap. Hit STOP anytime.", 60, 168, width - 120, 60);
 
   if (renderButton(controlScreenEnabled ? "STOP (disable input)" : "START (enable input)", width * 0.5 - 140, 320, 280, 70)) {
     controlScreenEnabled = !controlScreenEnabled;
@@ -430,7 +451,8 @@ void drawControlScreen() {
   // live values
   fill(200);
   textAlign(LEFT, TOP);
-  text("FSR: " + fsrValue + "   Flex: " + flexValue + "   joyX: " + joyX + "   joyY: " + joyY, 60, 410);
+  text("Primary → FSR: " + fsrPrimary + "   Flex: " + flexPrimary + "   joyX: " + joyXPrimary + "   joyY: " + joyYPrimary + "   gyroZ(adj): " + nf(gyroZPrimaryAdj, 0, 1), 60, 410);
+  text("Secondary → FSR: " + fsrSecondary + "   joyX: " + joyXSecondary + "   joyY: " + joyYSecondary + "   gyroZ(adj): " + nf(gyroZSecondaryAdj, 0, 1), 60, 436);
 
   // Back button
   if (renderButton("Back", 40, height - 70, 140, 44)) {
@@ -713,6 +735,11 @@ void handlePlayer() {
 
   if (keyQ) player.turretAngle -= 0.04;
   if (keyE) player.turretAngle += 0.04;
+  if (gyroZPrimaryAdj > gyroTurretDeadband) {
+    player.turretAngle += gyroTurretSpinStep; // CW when tilted right
+  } else if (gyroZPrimaryAdj < -gyroTurretDeadband) {
+    player.turretAngle -= gyroTurretSpinStep; // CCW when tilted left
+  }
 
   if (keyShoot && millis() - lastPlayerShot > 200) {
     shoot(player);
@@ -733,6 +760,11 @@ void handleBot() {
 
     if (keyU) bot.turretAngle -= 0.04;
     if (keyO) bot.turretAngle += 0.04;
+    if (gyroZSecondaryAdj > gyroTurretDeadband) {
+      bot.turretAngle += gyroTurretSpinStep; // CW when tilted right
+    } else if (gyroZSecondaryAdj < -gyroTurretDeadband) {
+      bot.turretAngle -= gyroTurretSpinStep; // CCW when tilted left
+    }
     if (keyShoot2 && millis() - lastBotShot > 200) {
       shoot(bot);
       lastBotShot = millis();
@@ -869,59 +901,112 @@ void setupRobot() {
 }
 
 void setupSerial() {
-  if (serialPort != null) return;
-  try {
-    String[] ports = Serial.list();
-    if (ports.length == 0) {
-      println("No serial ports found.");
-      return;
-    }
-    String chosen;
-    if (SERIAL_PORT_INDEX >= 0 && SERIAL_PORT_INDEX < ports.length) {
-      chosen = ports[SERIAL_PORT_INDEX];
-    } else {
-      chosen = ports[ports.length - 1];
-    }
-    println("Opening serial on " + chosen + " @115200");
-    serialPort = new Serial(this, chosen, 115200);
-    serialPort.clear();
+  String[] ports = Serial.list();
+  if (ports.length == 0) {
+    println("No serial ports found.");
+    return;
   }
-  catch (Exception e) {
-    println("Serial init failed: " + e.getMessage());
-    serialPort = null;
+
+  // Primary uses the last port
+  if (serialPrimary == null) {
+    String primaryPort = ports[ports.length - 1];
+    try {
+      println("Opening PRIMARY serial on " + primaryPort + " @115200");
+      serialPrimary = new Serial(this, primaryPort, 115200);
+      serialPrimary.clear();
+    }
+    catch (Exception e) {
+      println("Primary serial init failed: " + e.getMessage());
+      serialPrimary = null;
+    }
+  }
+
+  // Small delay to avoid driver contention when opening back-to-back
+  delay(2000);
+
+  // Secondary uses the second-to-last port (if available)
+  if (ports.length >= 2 && serialSecondary == null) {
+    String secondaryPort = ports[ports.length - 2];
+    try {
+      println("Opening SECONDARY serial on " + secondaryPort + " @115200");
+      serialSecondary = new Serial(this, secondaryPort, 115200);
+      serialSecondary.clear();
+    }
+    catch (Exception e) {
+      println("Secondary serial init failed: " + e.getMessage());
+      serialSecondary = null;
+    }
   }
 }
 
 void serialEvent(Serial port) {
-  if (port != serialPort) return;
   String line = port.readStringUntil('\n');
   if (line == null) return;
   line = trim(line);
   String[] parts = split(line, ',');
   if (parts.length < 11) return;
 
+  if (port == serialPrimary) {
+    handlePrimaryPacket(parts);
+  } else if (port == serialSecondary) {
+    handleSecondaryPacket(parts);
+  }
+}
+
+void handlePrimaryPacket(String[] parts) {
   try {
-    fsrValue = int(parts[0].trim());
-    flexValue = int(parts[1].trim());
-    joyX = int(parts[8].trim());
-    joyY = int(parts[9].trim());
+    fsrPrimary = int(parts[0].trim());
+    flexPrimary = int(parts[1].trim());
+    gyroXPrimary = float(parts[5].trim());
+    gyroYPrimary = float(parts[6].trim());
+    gyroZPrimary = float(parts[7].trim());
+    if (!gyroZeroedPrimary) {
+      gyroZeroPrimaryZ = gyroZPrimary;
+      gyroZeroedPrimary = true;
+    }
+    gyroZPrimaryAdj = gyroZPrimary - gyroZeroPrimaryZ;
+    joyXPrimary = int(parts[8].trim());
+    joyYPrimary = int(parts[9].trim());
   }
   catch (Exception e) {
     return;
   }
 
-
   if (!controlScreenEnabled || sysBot == null) return;
-  handleJoystickKeys();
-  handleFsrSpace();
-  handleMouseClick();
+  handlePrimaryJoystickKeys();
+  handlePrimarySpace();
+  handlePrimaryMouseClick();
 }
 
-void handleJoystickKeys() {
-  boolean joyUp = joyY > 800;
-  boolean joyDown = joyY < 250;
-  boolean joyRight = joyX > 800;
-  boolean joyLeft = joyX < 250;
+void handleSecondaryPacket(String[] parts) {
+  try {
+    fsrSecondary = int(parts[0].trim());
+    flexSecondary = int(parts[1].trim());
+    gyroXSecondary = float(parts[5].trim());
+    gyroYSecondary = float(parts[6].trim());
+    gyroZSecondary = float(parts[7].trim());
+    if (!gyroZeroedSecondary) {
+      gyroZeroSecondaryZ = gyroZSecondary;
+      gyroZeroedSecondary = true;
+    }
+    gyroZSecondaryAdj = gyroZSecondary - gyroZeroSecondaryZ;
+    joyXSecondary = int(parts[8].trim());
+    joyYSecondary = int(parts[9].trim());
+  }
+  catch (Exception e) {
+    return;
+  }
+
+  if (!controlScreenEnabled || sysBot == null) return;
+  handleSecondaryJoystickKeys();
+  handleSecondaryEnter();
+}
+
+void handlePrimaryJoystickKeys() {
+  boolean joyUp = joyYPrimary > 800;
+  boolean joyDown = joyYPrimary < 250;
+  boolean joyRight = joyXPrimary > 800;
+  boolean joyLeft = joyXPrimary < 250;
 
   // Remap: A movement drives W key; W movement drives D key; swap S/A outputs
   boolean wNew = joyRight;
@@ -940,6 +1025,29 @@ void handleJoystickKeys() {
   ctrl_d = dNew;
 }
 
+void handleSecondaryJoystickKeys() {
+  boolean joyUp = joyYSecondary > 800;
+  boolean joyDown = joyYSecondary < 250;
+  boolean joyRight = joyXSecondary > 800;
+  boolean joyLeft = joyXSecondary < 250;
+
+  // Same remap as primary, but drive arrow keys
+  boolean upNew = joyRight;
+  boolean downNew = joyLeft;
+  boolean leftNew = joyDown;
+  boolean rightNew = joyUp;
+
+  updateKey(ctrl_up, upNew, java.awt.event.KeyEvent.VK_UP);
+  updateKey(ctrl_down, downNew, java.awt.event.KeyEvent.VK_DOWN);
+  updateKey(ctrl_left, leftNew, java.awt.event.KeyEvent.VK_LEFT);
+  updateKey(ctrl_right, rightNew, java.awt.event.KeyEvent.VK_RIGHT);
+
+  ctrl_up = upNew;
+  ctrl_down = downNew;
+  ctrl_left = leftNew;
+  ctrl_right = rightNew;
+}
+
 void updateKey(boolean current, boolean desired, int keyCode) {
   if (sysBot == null) return;
   if (desired && !current) {
@@ -949,9 +1057,10 @@ void updateKey(boolean current, boolean desired, int keyCode) {
   }
 }
 
-void handleMouseClick() {
+void handlePrimaryMouseClick() {
   if (sysBot == null) return;
-  boolean shouldHold = flexValue < mouseClickThreshold;
+  // Allow either device's flex to click, so swapping devices still works
+  boolean shouldHold = (flexPrimary > mouseClickThreshold) || (flexSecondary > mouseClickThreshold);
   if (shouldHold && !mouseHeld) {
     sysBot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
     mouseHeld = true;
@@ -961,10 +1070,16 @@ void handleMouseClick() {
   }
 }
 
-void handleFsrSpace() {
-  boolean spaceNew = fsrValue > fsrSpaceThreshold;
+void handlePrimarySpace() {
+  boolean spaceNew = fsrPrimary > fsrSpaceThreshold;
   updateKey(ctrl_space, spaceNew, java.awt.event.KeyEvent.VK_SPACE);
   ctrl_space = spaceNew;
+}
+
+void handleSecondaryEnter() {
+  boolean enterNew = fsrSecondary > fsrEnterThreshold;
+  updateKey(ctrl_enter, enterNew, java.awt.event.KeyEvent.VK_ENTER);
+  ctrl_enter = enterNew;
 }
 
 void controlMouseWithTracker() {
@@ -992,10 +1107,16 @@ void releaseControlKeys() {
     java.awt.event.KeyEvent.VK_A,
     java.awt.event.KeyEvent.VK_S,
     java.awt.event.KeyEvent.VK_D,
-    java.awt.event.KeyEvent.VK_SPACE
+    java.awt.event.KeyEvent.VK_SPACE,
+    java.awt.event.KeyEvent.VK_UP,
+    java.awt.event.KeyEvent.VK_DOWN,
+    java.awt.event.KeyEvent.VK_LEFT,
+    java.awt.event.KeyEvent.VK_RIGHT,
+    java.awt.event.KeyEvent.VK_ENTER
   };
   for (int k : keys) sysBot.keyRelease(k);
   ctrl_w = ctrl_a = ctrl_s = ctrl_d = ctrl_space = false;
+  ctrl_up = ctrl_down = ctrl_left = ctrl_right = ctrl_enter = false;
 }
 
 void releaseMouse() {
@@ -1081,6 +1202,21 @@ void drawColorSwatch(String label, color c, boolean seen, float x, float y) {
   popStyle();
 }
 
+void flipPrimarySecondary() {
+  color tmpTarget = trackerA.target;
+  trackerA.setColor(trackerB.target);
+  trackerB.setColor(tmpTarget);
+
+  color tmpDefault = primaryDefault;
+  primaryDefault = secondaryDefault;
+  secondaryDefault = tmpDefault;
+
+  statsA.dotColor = primaryDefault;
+  statsB.dotColor = secondaryDefault;
+
+  println("Flipped colors. Primary now: " + rgbString(trackerA.target) + " | Secondary: " + rgbString(trackerB.target));
+}
+
 // ------------------------------------------------------------
 // Input
 // ------------------------------------------------------------
@@ -1099,6 +1235,10 @@ void keyPressed() {
   if (key == 'u' || key == 'U') keyU = true;
   if (key == 'o' || key == 'O') keyO = true;
   if (keyCode == ENTER || keyCode == RETURN) keyShoot2 = true;
+  if (keyCode == UP) keyI = true;
+  if (keyCode == DOWN) keyK = true;
+  if (keyCode == LEFT) keyJ = true;
+  if (keyCode == RIGHT) keyL = true;
 
   // calibration hotkeys
   if (screen == SCREEN_CALIB && camPixels != null) {
@@ -1129,6 +1269,10 @@ void keyReleased() {
   if (key == 'u' || key == 'U') keyU = false;
   if (key == 'o' || key == 'O') keyO = false;
   if (keyCode == ENTER || keyCode == RETURN) keyShoot2 = false;
+  if (keyCode == UP) keyI = false;
+  if (keyCode == DOWN) keyK = false;
+  if (keyCode == LEFT) keyJ = false;
+  if (keyCode == RIGHT) keyL = false;
 }
 
 color sampleColorAt(PVector screenPos) {
@@ -1536,10 +1680,6 @@ class PreviewWindow extends PApplet {
     popMatrix();
   }
 
-  String rgbString(color c) {
-    return int(red(c)) + "," + int(green(c)) + "," + int(blue(c));
-  }
-
   int[] calcScanBounds(int w, int h) {
     float boxW, boxH;
     if (w / float(h) > screenAspect) {
@@ -1580,6 +1720,10 @@ void polygon(float x, float y, float radius, int npoints) {
     vertex(sx, sy);
   }
   endShape(CLOSE);
+}
+
+String rgbString(color c) {
+  return int(red(c)) + "," + int(green(c)) + "," + int(blue(c));
 }
 
 void exit() {
