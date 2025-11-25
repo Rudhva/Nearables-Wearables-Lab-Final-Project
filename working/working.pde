@@ -26,8 +26,10 @@ PreviewWindow previewWin;
 Robot sysBot;
 Serial serialPort;
 
-ColorTracker trackerA = new ColorTracker(color(255, 80, 80));
-ColorTracker trackerB = new ColorTracker(color(80, 200, 120));
+color primaryDefault = color(0, 240, 140);    // bright green (pre-calibrated)
+color secondaryDefault = color(210, 90, 200); // magenta (pre-calibrated)
+ColorTracker trackerA = new ColorTracker(primaryDefault);
+ColorTracker trackerB = new ColorTracker(secondaryDefault);
 float colorThreshold = 45;
 float colorToleranceFactor = 1.02; // allow 2% slack to reduce jitter
 float scanScale = 1.0;             // scan portion of camera (scaled, but keeps aspect below)
@@ -46,8 +48,8 @@ boolean therapyRunning = false;
 boolean therapyFinished = false;
 int therapyStartMillis = 0;
 int therapyEndMillis = 0;
-TherapyStats statsA = new TherapyStats("Player A", color(255, 80, 80));
-TherapyStats statsB = new TherapyStats("Player B", color(80, 200, 120));
+TherapyStats statsA = new TherapyStats("Player A", primaryDefault);
+TherapyStats statsB = new TherapyStats("Player B", secondaryDefault);
 
 // ---------- Shape battle ----------
 Tank player;
@@ -66,12 +68,15 @@ int botMaxHits = 5;
 // ---------- Control screen (serial + mouse/keyboard) ----------
 int SERIAL_PORT_INDEX = -1;
 boolean controlScreenEnabled = false;
-boolean ctrl_w, ctrl_a, ctrl_s, ctrl_d;
+boolean ctrl_w, ctrl_a, ctrl_s, ctrl_d, ctrl_space;
 boolean mouseHeld = false;
 int fsrValue = 0;
+int flexValue = 0;
+int lastFlexLogMs = 0;
 int joyX = 0, joyY = 0;
 int joyDeadZone = 120;
-int mouseClickThreshold = 800;
+int mouseClickThreshold = 80;
+int fsrSpaceThreshold = 800;
 
 void settings() {
   size(int(CAM_W * WIN_SCALE), int(CAM_H * WIN_SCALE));
@@ -120,6 +125,9 @@ void draw() {
   background(16, 18, 26);
   updateCameraFrame();
   updateTracking();
+  if (controlScreenEnabled) {
+    controlMouseWithTracker();
+  }
 
   switch (screen) {
   case SCREEN_HOME:
@@ -171,7 +179,7 @@ void updateTracking() {
 void drawHome() {
   drawBackdrop();
   drawBanner("Nearables / Wearables Lab", "Calibrate → choose players → pick a mode. Camera preview is in its own window.");
-  disableControlMode(); // safety when leaving control screen
+  //disableControlMode(); // safety when leaving control screen
 
   // menu grid
   float cardW = (width - 100) / 2;
@@ -215,12 +223,12 @@ void drawCalibration() {
   fill(180);
   text("Current: " + (playerCount == 1 ? "Solo" : "Two players"), 30, toggleY + 44);
 
-  drawCalibCrosshair(calibPosA, color(255, 80, 80));
-  drawCalibCrosshair(calibPosB, color(80, 200, 120));
+  drawCalibCrosshair(calibPosA, primaryDefault);
+  drawCalibCrosshair(calibPosB, secondaryDefault);
 
   // live tracked dots
-  drawTrackedDot(trackerA, color(255, 120, 120));
-  drawTrackedDot(trackerB, color(140, 255, 160));
+  drawTrackedDot(trackerA, primaryDefault);
+  drawTrackedDot(trackerB, secondaryDefault);
 
   // Color swatches + status
   drawColorSwatch("Primary", trackerA.target, trackerA.found, 30, height - 140);
@@ -240,7 +248,6 @@ void drawTherapy() {
   image(mazeLayer, 0, 0, width, height);
   drawTherapyHUD();
   drawBanner("Therapy Maze", playerCount > 1 ? "Both colors track together. Reach the gold goal." : "Keep the dot on the path. Reach the gold goal.");
-  disableControlMode(); // safety
 
   // Player A tracking
   if (trackerA.found) {
@@ -348,7 +355,6 @@ void drawShapeGame() {
   drawBackdrop();
   drawBanner("Shape Battle", playerCount > 1 ? "P1 vs P2: WASD/QE/SPACE vs IJKL/UO/ENTER" : "P1 vs CPU: WASD/QE/SPACE");
   drawShapeMap();
-  disableControlMode(); // ensure serial control off when gaming
 
   updateShapeWorld();
 
@@ -399,7 +405,7 @@ void drawShapeOver() {
 
 void drawControlScreen() {
   drawBackdrop();
-  drawBanner("Serial Control", "Primary color moves mouse. Joystick → WASD. FSR > 800 clicks. Big STOP toggles safety.");
+  drawBanner("Serial Control", "Primary color moves mouse. Joy remap: X>800→W, X<250→S, Y>800→D, Y<250→A. Flex clicks; FSR = SPACE. STOP toggles safety.");
 
   fill(0, 0, 0, 140);
   noStroke();
@@ -409,7 +415,7 @@ void drawControlScreen() {
   textSize(16);
   text("Status: " + (controlScreenEnabled ? "ENABLED" : "DISABLED") + "  |  Serial: " + (serialPort == null ? "not connected" : "ok"), 60, 140);
   textSize(14);
-  text("Mouse follows primary color across the screen. Joystick acts as WASD. FSR > " + mouseClickThreshold + " = mouse click. Hit STOP anytime.", 60, 168, width - 120, 60);
+  text("Mouse follows primary color across the screen. Flex > " + mouseClickThreshold + " = mouse click. FSR > " + fsrSpaceThreshold + " = SPACE. Hit STOP anytime.", 60, 168, width - 120, 60);
 
   if (renderButton(controlScreenEnabled ? "STOP (disable input)" : "START (enable input)", width * 0.5 - 140, 320, 280, 70)) {
     controlScreenEnabled = !controlScreenEnabled;
@@ -424,15 +430,10 @@ void drawControlScreen() {
   // live values
   fill(200);
   textAlign(LEFT, TOP);
-  text("FSR: " + fsrValue + "   joyX: " + joyX + "   joyY: " + joyY, 60, 410);
-
-  if (controlScreenEnabled) {
-    controlMouseWithTracker();
-  }
+  text("FSR: " + fsrValue + "   Flex: " + flexValue + "   joyX: " + joyX + "   joyY: " + joyY, 60, 410);
 
   // Back button
   if (renderButton("Back", 40, height - 70, 140, 44)) {
-    disableControlMode();
     screen = SCREEN_HOME;
   }
 }
@@ -475,14 +476,14 @@ void drawTrackerDots(float x, float y, float w, float h) {
     float dx = x + (cam.width - trackerA.camPos.x) * sx;
     float dy = y + trackerA.camPos.y * sy;
     noStroke();
-    fill(255, 120, 120);
+    fill(primaryDefault);
     ellipse(dx, dy, 12, 12);
   }
   if (trackerB.found && trackerB.camPos != null) {
     float dx = x + (cam.width - trackerB.camPos.x) * sx;
     float dy = y + trackerB.camPos.y * sy;
     noStroke();
-    fill(140, 255, 160);
+    fill(secondaryDefault);
     ellipse(dx, dy, 12, 12);
   }
 }
@@ -901,6 +902,7 @@ void serialEvent(Serial port) {
 
   try {
     fsrValue = int(parts[0].trim());
+    flexValue = int(parts[1].trim());
     joyX = int(parts[8].trim());
     joyY = int(parts[9].trim());
   }
@@ -908,16 +910,24 @@ void serialEvent(Serial port) {
     return;
   }
 
+
   if (!controlScreenEnabled || sysBot == null) return;
   handleJoystickKeys();
+  handleFsrSpace();
   handleMouseClick();
 }
 
 void handleJoystickKeys() {
-  boolean wNew = joyY > 800;
-  boolean sNew = joyY < 250;
-  boolean aNew = joyX > 800;
-  boolean dNew = joyX < 250;
+  boolean joyUp = joyY > 800;
+  boolean joyDown = joyY < 250;
+  boolean joyRight = joyX > 800;
+  boolean joyLeft = joyX < 250;
+
+  // Remap: A movement drives W key; W movement drives D key; swap S/A outputs
+  boolean wNew = joyRight;
+  boolean sNew = joyLeft;
+  boolean aNew = joyDown;
+  boolean dNew = joyUp;
 
   updateKey(ctrl_w, wNew, java.awt.event.KeyEvent.VK_W);
   updateKey(ctrl_s, sNew, java.awt.event.KeyEvent.VK_S);
@@ -941,7 +951,7 @@ void updateKey(boolean current, boolean desired, int keyCode) {
 
 void handleMouseClick() {
   if (sysBot == null) return;
-  boolean shouldHold = fsrValue > mouseClickThreshold;
+  boolean shouldHold = flexValue < mouseClickThreshold;
   if (shouldHold && !mouseHeld) {
     sysBot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
     mouseHeld = true;
@@ -949,6 +959,12 @@ void handleMouseClick() {
     sysBot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
     mouseHeld = false;
   }
+}
+
+void handleFsrSpace() {
+  boolean spaceNew = fsrValue > fsrSpaceThreshold;
+  updateKey(ctrl_space, spaceNew, java.awt.event.KeyEvent.VK_SPACE);
+  ctrl_space = spaceNew;
 }
 
 void controlMouseWithTracker() {
@@ -975,10 +991,11 @@ void releaseControlKeys() {
     java.awt.event.KeyEvent.VK_W,
     java.awt.event.KeyEvent.VK_A,
     java.awt.event.KeyEvent.VK_S,
-    java.awt.event.KeyEvent.VK_D
+    java.awt.event.KeyEvent.VK_D,
+    java.awt.event.KeyEvent.VK_SPACE
   };
   for (int k : keys) sysBot.keyRelease(k);
-  ctrl_w = ctrl_a = ctrl_s = ctrl_d = false;
+  ctrl_w = ctrl_a = ctrl_s = ctrl_d = ctrl_space = false;
 }
 
 void releaseMouse() {
@@ -1569,7 +1586,8 @@ void exit() {
   if (previewWin != null) {
     previewWin.dispose();
   }
-  disableControlMode();
+  releaseControlKeys();
+  releaseMouse();
   trackerA.stopThread();
   trackerB.stopThread();
   super.exit();
