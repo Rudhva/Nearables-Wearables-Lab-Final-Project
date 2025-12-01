@@ -35,6 +35,7 @@ float colorThreshold = 45;
 float colorToleranceFactor = 1.02; // allow 2% slack to reduce jitter
 float scanScale = 1.0;             // scan portion of camera (scaled, but keeps aspect below)
 float screenAspect = 2560.0 / 1664.0; // MacBook Air M3 aspect
+//1920.0 / 1080.0
 
 PVector calibPosA, calibPosB;
 boolean prevMouseDown = false;
@@ -65,7 +66,7 @@ int lastPlayerShot = 0;
 int lastBotShot = 0;
 
 // ---------- Control screen (serial + mouse/keyboard) ----------
-boolean controlScreenEnabled = true;
+boolean controlScreenEnabled = false;
 boolean ctrl_w, ctrl_a, ctrl_s, ctrl_d, ctrl_space;
 boolean ctrl_up, ctrl_left, ctrl_down, ctrl_right, ctrl_enter;
 boolean mouseHeld = false;
@@ -226,12 +227,11 @@ void drawHome() {
 
 void drawCalibration() {
   drawBackdrop();
-  drawBanner("Calibration", "Set player count, place colors in circles, sample with 1/2.");
   drawCameraFull();
 
   fill(0, 0, 0, 150);
   noStroke();
-  rect(20, 20, width - 40, 140, 12);
+  rect(20, 20, width - 40, 90, 12);
   fill(255);
   textAlign(LEFT, TOP);
   textSize(20);
@@ -486,7 +486,7 @@ void drawShapeOver() {
 
 void drawControlScreen() {
   drawBackdrop();
-  drawBanner("Serial Control", "Primary device (primary color) drives mouse + WASD/SPACE. Secondary device drives arrows/ENTER only. Joy remap: X>800→W, X<250→S, Y>800→D, Y<250→A.");
+  drawBanner("Serial Control", "Primary device drives mouse + WASD/SPACE. Secondary device drives arrows/ENTER only.");
 
   fill(0, 0, 0, 140);
   noStroke();
@@ -714,16 +714,24 @@ void drawTherapyHUD() {
   fill(0, 0, 0, 140);
   noStroke();
   rect(0, 0, width, 70);
+
   fill(255);
-  textAlign(LEFT, CENTER);
+  textAlign(LEFT, TOP);   // <--- IMPORTANT: anchor at the top-left of each text
   textSize(16);
+
   float elapsed = (therapyRunning ? (millis() - therapyStartMillis) / 1000.0 : statsA.timeSec);
-  text("Time: " + nf(elapsed, 0, 2) + " s", 20, 35);
-  text("P1 acc: " + nf(statsA.accuracy * 100, 0, 1) + "% | col: " + statsA.collisions, 170, 35);
+
+  // Move everything near top-left:
+  float tx = 25;   // left padding
+  float ty = 90;   // top padding
+
+  text("Time: " + nf(elapsed, 0, 2) + " s", tx, ty);
+  text("P1 acc: " + nf(statsA.accuracy * 100, 0, 1) + "% | col: " + statsA.collisions, tx + 150, ty);
   if (playerCount > 1) {
-    text("P2 acc: " + nf(statsB.accuracy * 100, 0, 1) + "% | col: " + statsB.collisions, 380, 35);
+    text("P2 acc: " + nf(statsB.accuracy * 100, 0, 1) + "% | col: " + statsB.collisions, tx + 360, ty);
   }
-  text("Difficulty: " + mazeDifficulty + " | Goal: reach the gold circle", width - 300, 35);
+
+  text("Difficulty: " + mazeDifficulty + " | Goal: reach the gold circle", tx, ty + 40);
 }
 
 String pickTherapyFact(float accuracy, float timeSec) {
@@ -922,7 +930,6 @@ void drawShapeHUD() {
   // CHANGED to show lives remaining instead of hits taken
   text("P1 (Square) lives: " + (player.maxLives - player.hits) + "/" + player.maxLives, 20, 30);
   text((playerCount > 1 ? "P2" : "CPU") + " (Pentagon) lives: " + (bot.maxLives - bot.hits) + "/" + bot.maxLives, 240, 30);
-  text("Shrinks with each hit! | P1: WASD/QE/SPACE | P2: IJKL/UO/ENTER", 520, 30);
 }
 
 // ------------------------------------------------------------
