@@ -16,6 +16,13 @@ final int SCREEN_CONTROL = 6;
 
 int screen = SCREEN_HOME;
 
+float therapyMouseX = 0;
+float therapyMouseY = 0;
+boolean therapyMouseActive = false;
+// Add after the gyro variables
+boolean keyM_held = false;
+boolean keyN_held = false;
+
 final int CAM_W = 640;
 final int CAM_H = 480;
 final float WIN_SCALE = 1.5;
@@ -63,8 +70,6 @@ boolean shapeGameOver = false;
 String shapeWinner = "";
 int lastPlayerShot = 0;
 int lastBotShot = 0;
-int playerMaxHits = 5;
-int botMaxHits = 5;
 
 // ---------- Control screen (serial + mouse/keyboard) ----------
 boolean controlScreenEnabled = true;
@@ -139,34 +144,59 @@ void draw() {
   background(16, 18, 26);
   updateCameraFrame();
   updateTracking();
-  if (controlScreenEnabled) {
+  
+  // Track mouse position for therapy mode
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+  }
+
+  // --- FIX: ONLY CONTROL MOUSE ON CONTROL SCREEN ---
+  if (screen == SCREEN_CONTROL) {
     controlMouseWithTracker();
   }
 
   switch (screen) {
-  case SCREEN_HOME:
-    drawHome();
-    break;
-  case SCREEN_CALIB:
-    drawCalibration();
-    break;
-  case SCREEN_THERAPY:
-    drawTherapy();
-    break;
-  case SCREEN_THERAPY_RESULTS:
-    drawTherapyResults();
-    break;
-  case SCREEN_SHAPE:
-    drawShapeGame();
-    break;
-  case SCREEN_SHAPE_OVER:
-    drawShapeOver();
-    break;
-  case SCREEN_CONTROL:
-    drawControlScreen();
-    break;
+    case SCREEN_HOME:
+      drawHome();
+      break;
+    case SCREEN_CALIB:
+      drawCalibration();
+      break;
+    case SCREEN_THERAPY:
+      drawTherapy();
+      break;
+    case SCREEN_THERAPY_RESULTS:
+      drawTherapyResults();
+      break;
+    case SCREEN_SHAPE:
+      drawShapeGame();
+      break;
+    case SCREEN_SHAPE_OVER:
+      drawShapeOver();
+      break;
+    case SCREEN_CONTROL:
+      drawControlScreen();
+      break;
   }
 }
+
+void mouseMoved() {
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+    therapyMouseActive = true;
+  }
+}
+
+void mouseDragged() {
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+    therapyMouseActive = true;
+  }
+}
+
 
 void updateCameraFrame() {
   if (cam == null) return;
@@ -263,19 +293,60 @@ void drawCalibration() {
   }
 }
 
+// ============================================================
+// MAZE THERAPY - COLLISION FIX
+// ============================================================
+// Replace your existing drawTherapy() and TherapyStats class with these:
+
 void drawTherapy() {
   drawBackdrop();
   image(mazeLayer, 0, 0, width, height);
   drawTherapyHUD();
-  drawBanner("Therapy Maze", playerCount > 1 ? "Both colors track together. Reach the gold goal." : "Keep the dot on the path. Reach the gold goal.");
+  
+  String bannerText = playerCount > 1 ? "Both colors track together. Reach the gold goal." : "Keep the dot on the path. Reach the goal.";
+  if (keyM_held) bannerText += " [MOUSE MODE - move mouse/trackpad]";
+  drawBanner("Therapy Maze", bannerText);
 
-  // Player A tracking
-  if (trackerA.found) {
-    PVector p = trackerA.smoothed;
+  // Player A tracking - use mouse when M is held
+  boolean useMouseA = keyM_held;
+  PVector p = null;
+  
+  if (useMouseA) {
+    // Use continuously tracked mouse position
+    p = new PVector(therapyMouseX, therapyMouseY);
+  } else if (trackerA.found && trackerA.smoothed != null) {
+    // Use camera tracking
+    p = trackerA.smoothed.copy();
+  }
+  
+  if (p != null) {
     boolean onPath = isOnMaze(p);
+    
+    // IMPROVED: Check multiple points around the dot for camera tracking
+    if (!useMouseA && trackerA.found) {
+      float checkRadius = 12;
+      boolean top = isOnMaze(new PVector(p.x, p.y - checkRadius));
+      boolean bottom = isOnMaze(new PVector(p.x, p.y + checkRadius));
+      boolean left = isOnMaze(new PVector(p.x - checkRadius, p.y));
+      boolean right = isOnMaze(new PVector(p.x + checkRadius, p.y));
+      
+      int edgesOnPath = (top ? 1 : 0) + (bottom ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+      onPath = onPath && edgesOnPath >= 2;
+    }
+    
     if (therapyRunning) {
       statsA.trackedFrames++;
-      if (onPath) statsA.onPath++; else statsA.collisions++;
+      
+      if (onPath) {
+        statsA.onPath++;
+        statsA.wasOffPath = false;
+      } else {
+        if (!statsA.wasOffPath) {
+          statsA.collisions++;
+          statsA.wasOffPath = true;
+        }
+      }
+      
       statsA.refreshLive(therapyStartMillis);
       if (checkTherapyGoal(p)) statsA.reachedGoal = true;
     }
@@ -283,20 +354,59 @@ void drawTherapy() {
     noStroke();
     fill(onPath ? color(90, 255, 200) : color(255, 80, 120));
     ellipse(p.x, p.y, 24, 24);
+    
+    // Show indicator
+    if (useMouseA) {
+      fill(255, 255, 0, 150);
+      textAlign(CENTER, CENTER);
+      textSize(12);
+      text("MOUSE", p.x, p.y - 20);
+    }
   } else {
     fill(255, 60, 80);
     textAlign(CENTER, CENTER);
-    text("Primary color not visible. Move into frame to start.", width * 0.5, height * 0.45);
+    textSize(16);
+    text("Primary color not visible. Press and HOLD 'M' key, then move mouse/trackpad.", width * 0.5, height * 0.45);
   }
 
   // Player B tracking (only if enabled)
   if (playerCount > 1) {
-    if (trackerB.found) {
-      PVector p2 = trackerB.smoothed;
+    boolean useMouseB = keyN_held;
+    PVector p2 = null;
+    
+    if (useMouseB) {
+      p2 = new PVector(therapyMouseX, therapyMouseY);
+    } else if (trackerB.found && trackerB.smoothed != null) {
+      p2 = trackerB.smoothed.copy();
+    }
+    
+    if (p2 != null) {
       boolean onPath2 = isOnMaze(p2);
+      
+      if (!useMouseB && trackerB.found) {
+        float checkRadius = 12;
+        boolean top = isOnMaze(new PVector(p2.x, p2.y - checkRadius));
+        boolean bottom = isOnMaze(new PVector(p2.x, p2.y + checkRadius));
+        boolean left = isOnMaze(new PVector(p2.x - checkRadius, p2.y));
+        boolean right = isOnMaze(new PVector(p2.x + checkRadius, p2.y));
+        
+        int edgesOnPath = (top ? 1 : 0) + (bottom ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+        onPath2 = onPath2 && edgesOnPath >= 2;
+      }
+      
       if (therapyRunning) {
         statsB.trackedFrames++;
-        if (onPath2) statsB.onPath++; else statsB.collisions++;
+        
+        if (onPath2) {
+          statsB.onPath++;
+          statsB.wasOffPath = false;
+        } else {
+          if (!statsB.wasOffPath) {
+            statsB.collisions++;
+            statsB.wasOffPath = true;
+          }
+        }
+        
         statsB.refreshLive(therapyStartMillis);
         if (checkTherapyGoal(p2)) statsB.reachedGoal = true;
       }
@@ -304,10 +414,18 @@ void drawTherapy() {
       noStroke();
       fill(onPath2 ? color(140, 255, 200) : color(255, 210, 120));
       ellipse(p2.x, p2.y, 24, 24);
+      
+      if (useMouseB) {
+        fill(255, 100, 255, 150);
+        textAlign(CENTER, CENTER);
+        textSize(12);
+        text("MOUSE", p2.x, p2.y - 20);
+      }
     } else {
       fill(255, 210, 120);
       textAlign(CENTER, CENTER);
-      text("Secondary color not visible.", width * 0.5, height * 0.55);
+      textSize(16);
+      text("Secondary color not visible. Press and HOLD 'N' key, then move mouse/trackpad.", width * 0.5, height * 0.55);
     }
   }
 
@@ -556,13 +674,14 @@ void buildMaze() {
   mazeLayer.fill(255, 200, 80);
   mazeLayer.ellipse(mazeGoal.x, mazeGoal.y, mazePathWidth * 0.9, mazePathWidth * 0.9);
   mazeLayer.endDraw();
+  mazeLayer.loadPixels();
 }
 
 boolean isOnMaze(PVector p) {
-  if (p == null) return false;
-  int px = constrain(int(p.x), 0, width - 1);
-  int py = constrain(int(p.y), 0, height - 1);
-  int col = mazeLayer.get(px, py);
+  int x = constrain(int(p.x), 0, mazeLayer.width-1);
+  int y = constrain(int(p.y), 0, mazeLayer.height-1);
+
+  int col = mazeLayer.pixels[y * mazeLayer.width + x];
   return brightness(col) > 25;
 }
 
@@ -706,9 +825,11 @@ void initShapeGame() {
 
 void resetShapeGame() {
   bullets.clear();
-  player = new Tank(new PVector(width * 0.2, height * 0.5), color(90, 180, 255), true);
-  bot = new Tank(new PVector(width * 0.8, height * 0.5), color(255, 180, 90), false);
+  // ADD shape parameter (0 for square, 1 for pentagon)
+  player = new Tank(new PVector(width * 0.2, height * 0.5), color(90, 180, 255), true, 0);
+  bot = new Tank(new PVector(width * 0.8, height * 0.5), color(255, 180, 90), false, 1);
   player.hits = bot.hits = 0;
+  player.maxLives = bot.maxLives = 5; // ADD this line
   shapeGameOver = false;
   shapeWinner = "";
 }
@@ -813,13 +934,13 @@ void updateBullets() {
     }
     // player hit
     if (!b.expired && b.owner != player && b.hitsTank(player)) {
-      player.hits++;
+      player.takeDamage(); // CHANGED from player.hits++
       b.expired = true;
       checkShapeGameOver();
     }
     // bot hit
     if (!b.expired && b.owner != bot && b.hitsTank(bot)) {
-      bot.hits++;
+      bot.takeDamage(); // CHANGED from bot.hits++
       b.expired = true;
       checkShapeGameOver();
     }
@@ -831,21 +952,20 @@ void updateBullets() {
 }
 
 void drawBullets() {
-  noStroke();
+  // CHANGED to use bullet's own draw method instead of ellipse
   for (Bullet b : bullets) {
-    fill(b.owner == player ? color(90, 200, 255) : color(255, 180, 110));
-    ellipse(b.pos.x, b.pos.y, 12, 12);
+    b.draw();
   }
 }
 
 void checkShapeGameOver() {
-  if (player.hits >= playerMaxHits) {
+  if (player.hits >= player.maxLives) { // CHANGED from playerMaxHits
     shapeGameOver = true;
-    shapeWinner = (playerCount > 1) ? "Player 2" : "Bot";
+    shapeWinner = (playerCount > 1) ? "Player 2 (Pentagon)" : "Bot (Pentagon)"; // ADDED shape names
     screen = SCREEN_SHAPE_OVER;
-  } else if (bot.hits >= botMaxHits) {
+  } else if (bot.hits >= bot.maxLives) { // CHANGED from botMaxHits
     shapeGameOver = true;
-    shapeWinner = "Player 1";
+    shapeWinner = "Player 1 (Square)"; // ADDED shape name
     screen = SCREEN_SHAPE_OVER;
   }
 }
@@ -857,9 +977,10 @@ void drawShapeHUD() {
   fill(255);
   textAlign(LEFT, CENTER);
   textSize(16);
-  text("P1 hits: " + player.hits + "/" + playerMaxHits, 20, 30);
-  text((playerCount > 1 ? "P2" : "CPU") + " hits: " + bot.hits + "/" + botMaxHits, 170, 30);
-  text("P1: WASD move, Q/E aim, SPACE shoot | P2: IJKL move, U/O aim, ENTER shoot", 340, 30);
+  // CHANGED to show lives remaining instead of hits taken
+  text("P1 (Square) lives: " + (player.maxLives - player.hits) + "/" + player.maxLives, 20, 30);
+  text((playerCount > 1 ? "P2" : "CPU") + " (Pentagon) lives: " + (bot.maxLives - bot.hits) + "/" + bot.maxLives, 240, 30);
+  text("Shrinks with each hit! | P1: WASD/QE/SPACE | P2: IJKL/UO/ENTER", 520, 30);
 }
 
 // ------------------------------------------------------------
@@ -1239,6 +1360,10 @@ void keyPressed() {
   if (keyCode == DOWN) keyK = true;
   if (keyCode == LEFT) keyJ = true;
   if (keyCode == RIGHT) keyL = true;
+  
+  // ADD THESE LINES for mouse control
+  if (key == 'm' || key == 'M') keyM_held = true;
+  if (key == 'n' || key == 'N') keyN_held = true;
 
   // calibration hotkeys
   if (screen == SCREEN_CALIB && camPixels != null) {
@@ -1273,6 +1398,10 @@ void keyReleased() {
   if (keyCode == DOWN) keyK = false;
   if (keyCode == LEFT) keyJ = false;
   if (keyCode == RIGHT) keyL = false;
+  
+  // ADD THESE LINES for mouse control
+  if (key == 'm' || key == 'M') keyM_held = false;
+  if (key == 'n' || key == 'N') keyN_held = false;
 }
 
 color sampleColorAt(PVector screenPos) {
@@ -1294,6 +1423,7 @@ class TherapyStats {
   int onPath = 0;
   int collisions = 0;
   boolean reachedGoal = false;
+  boolean wasOffPath = false; // NEW: track previous frame state
   float timeSec = 0;
   float accuracy = 0;
   String fact = "";
@@ -1306,6 +1436,7 @@ class TherapyStats {
   void reset() {
     trackedFrames = onPath = collisions = 0;
     reachedGoal = false;
+    wasOffPath = false; // reset the state flag
     timeSec = 0;
     accuracy = 0;
     fact = "";
@@ -1483,15 +1614,21 @@ class Tank {
   float turretAngle = 0;
   float speed = 3.2;
   float radius = 26;
+  float baseRadius = 26; // NEW: starting size
   int hits = 0;
+  int maxLives = 5; // NEW
+  int shapeType; // NEW: 0 = square, 1 = pentagon
   color body;
   boolean isPlayer;
 
-  Tank(PVector p, color c, boolean playerControlled) {
+  Tank(PVector p, color c, boolean playerControlled, int shape) { // ADDED shape parameter
     pos = p.copy();
     body = c;
     isPlayer = playerControlled;
+    shapeType = shape; // NEW
     turretAngle = random(TWO_PI);
+    baseRadius = 30; // NEW
+    radius = baseRadius; // NEW
   }
 
   void move(PVector dir, ArrayList<Obstacle> obs) {
@@ -1503,7 +1640,6 @@ class Tank {
   }
 
   boolean collides(PVector np, ArrayList<Obstacle> obs) {
-    // walls
     if (np.x - radius < 0 || np.x + radius > width || np.y - radius < 0 || np.y + radius > height) {
       return true;
     }
@@ -1513,50 +1649,76 @@ class Tank {
     return false;
   }
 
+  // NEW METHOD
+  void takeDamage() {
+    hits++;
+    // Shrink by 15% each hit
+    float lifePercent = 1.0 - (hits / float(maxLives));
+    radius = baseRadius * (0.45 + 0.55 * lifePercent);
+    speed = 3.2 * (0.6 + 0.4 * lifePercent);
+  }
+
   void draw() {
     pushMatrix();
     translate(pos.x, pos.y);
-    rotate(turretAngle);
+    
+    // Draw glow/shadow
     noStroke();
-    fill(body);
-    polygon(0, 0, radius, 5);
     fill(0, 0, 0, 80);
-    ellipse(0, 0, radius * 1.2, radius * 1.2);
-    // turret barrel
+    if (shapeType == 0) { // NEW: different shapes
+      rectMode(CENTER);
+      rect(0, 0, radius * 2.2, radius * 2.2);
+      rectMode(CORNER);
+    } else {
+      polygon(0, 0, radius * 1.1, 5);
+    }
+    
+    // Draw main shape
+    fill(body);
+    if (shapeType == 0) { // NEW: square
+      rectMode(CENTER);
+      rect(0, 0, radius * 2, radius * 2, 4);
+      rectMode(CORNER);
+    } else { // NEW: pentagon
+      polygon(0, 0, radius, 5);
+    }
+    
+    // Draw turret barrel
+    rotate(turretAngle);
     stroke(255);
     strokeWeight(6);
     line(0, 0, radius + 10, 0);
+    
     popMatrix();
+    
+    // Draw life indicator
+    drawLives(); // NEW METHOD CALL
   }
-}
-
-class Bullet {
-  PVector pos;
-  PVector vel;
-  Tank owner;
-  int life = 0;
-  boolean expired = false;
-
-  Bullet(PVector p, PVector v, Tank o) {
-    pos = p.copy();
-    vel = v.copy();
-    owner = o;
-  }
-
-  void update() {
-    pos.add(vel);
-    life++;
-    if (pos.x < 0 || pos.x > width || pos.y < 0 || pos.y > height) expired = true;
-    if (life > 240) expired = true;
-  }
-
-  boolean hitsTank(Tank t) {
-    return pos.dist(t.pos) < t.radius;
+  
+  // NEW METHOD
+  void drawLives() {
+    int livesLeft = maxLives - hits;
+    float barWidth = radius * 2;
+    float barHeight = 6;
+    float barX = pos.x - radius;
+    float barY = pos.y - radius - 12;
+    
+    // Background
+    noStroke();
+    fill(50, 50, 50, 180);
+    rect(barX, barY, barWidth, barHeight, 3);
+    
+    // Life bar
+    float lifePercent = livesLeft / float(maxLives);
+    color barColor = lerpColor(color(255, 50, 50), color(50, 255, 100), lifePercent);
+    fill(barColor);
+    rect(barX, barY, barWidth * lifePercent, barHeight, 3);
   }
 }
 
 class Obstacle {
   float x, y, w, h;
+  
   Obstacle(float x, float y, float w, float h) {
     this.x = x;
     this.y = y;
@@ -1576,6 +1738,54 @@ class Obstacle {
     float cx = constrain(p.x, x, x + w);
     float cy = constrain(p.y, y, y + h);
     return dist(p.x, p.y, cx, cy) < r;
+  }
+}
+
+  class Bullet {
+  PVector pos;
+  PVector vel;
+  Tank owner;
+  int life = 0;
+  boolean expired = false;
+  int shapeType; // NEW: matches owner's shape
+
+  Bullet(PVector p, PVector v, Tank o) {
+    pos = p.copy();
+    vel = v.copy();
+    owner = o;
+    shapeType = o.shapeType; // NEW
+  }
+
+  void update() {
+    pos.add(vel);
+    life++;
+    if (pos.x < 0 || pos.x > width || pos.y < 0 || pos.y > height) expired = true;
+    if (life > 240) expired = true;
+  }
+
+  boolean hitsTank(Tank t) {
+    return pos.dist(t.pos) < t.radius;
+  }
+  
+  // NEW METHOD
+  void draw() {
+    pushMatrix();
+    translate(pos.x, pos.y);
+    noStroke();
+    fill(owner.body);
+    
+    float size = 12;
+    if (shapeType == 0) {
+      // Square bullet
+      rectMode(CENTER);
+      rect(0, 0, size, size);
+      rectMode(CORNER);
+    } else {
+      // Pentagon bullet
+      polygon(0, 0, size * 0.7, 5);
+    }
+    
+    popMatrix();
   }
 }
 
