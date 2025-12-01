@@ -16,6 +16,13 @@ final int SCREEN_CONTROL = 6;
 
 int screen = SCREEN_HOME;
 
+float therapyMouseX = 0;
+float therapyMouseY = 0;
+boolean therapyMouseActive = false;
+// Add after the gyro variables
+boolean keyM_held = false;
+boolean keyN_held = false;
+
 final int CAM_W = 640;
 final int CAM_H = 480;
 final float WIN_SCALE = 1.5;
@@ -35,7 +42,6 @@ float colorThreshold = 45;
 float colorToleranceFactor = 1.02; // allow 2% slack to reduce jitter
 float scanScale = 1.0;             // scan portion of camera (scaled, but keeps aspect below)
 float screenAspect = 2560.0 / 1664.0; // MacBook Air M3 aspect
-//1920.0 / 1080.0
 
 PVector calibPosA, calibPosB;
 boolean prevMouseDown = false;
@@ -66,7 +72,7 @@ int lastPlayerShot = 0;
 int lastBotShot = 0;
 
 // ---------- Control screen (serial + mouse/keyboard) ----------
-boolean controlScreenEnabled = false;
+boolean controlScreenEnabled = true;
 boolean ctrl_w, ctrl_a, ctrl_s, ctrl_d, ctrl_space;
 boolean ctrl_up, ctrl_left, ctrl_down, ctrl_right, ctrl_enter;
 boolean mouseHeld = false;
@@ -138,6 +144,12 @@ void draw() {
   background(16, 18, 26);
   updateCameraFrame();
   updateTracking();
+  
+  // Track mouse position for therapy mode
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+  }
 
   // --- FIX: ONLY CONTROL MOUSE ON CONTROL SCREEN ---
   if (screen == SCREEN_CONTROL) {
@@ -166,6 +178,22 @@ void draw() {
     case SCREEN_CONTROL:
       drawControlScreen();
       break;
+  }
+}
+
+void mouseMoved() {
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+    therapyMouseActive = true;
+  }
+}
+
+void mouseDragged() {
+  if (screen == SCREEN_THERAPY) {
+    therapyMouseX = mouseX;
+    therapyMouseY = mouseY;
+    therapyMouseActive = true;
   }
 }
 
@@ -227,11 +255,12 @@ void drawHome() {
 
 void drawCalibration() {
   drawBackdrop();
+  drawBanner("Calibration", "Set player count, place colors in circles, sample with 1/2.");
   drawCameraFull();
 
   fill(0, 0, 0, 150);
   noStroke();
-  rect(20, 20, width - 40, 90, 12);
+  rect(20, 20, width - 40, 140, 12);
   fill(255);
   textAlign(LEFT, TOP);
   textSize(20);
@@ -273,28 +302,45 @@ void drawTherapy() {
   drawBackdrop();
   image(mazeLayer, 0, 0, width, height);
   drawTherapyHUD();
-  drawBanner("Therapy Maze", playerCount > 1 ? "Both colors track together. Reach the gold goal." : "Keep the dot on the path. Reach the goal. Press M to toggle mouse control.");
+  
+  String bannerText = playerCount > 1 ? "Both colors track together. Reach the gold goal." : "Keep the dot on the path. Reach the goal.";
+  if (keyM_held) bannerText += " [MOUSE MODE - move mouse/trackpad]";
+  drawBanner("Therapy Maze", bannerText);
 
-  // Player A tracking - use mouse if camera not found OR if holding M key
-  boolean useMouseA = !trackerA.found || keyPressed && (key == 'm' || key == 'M');
-  PVector p;
+  // Player A tracking - use mouse when M is held
+  boolean useMouseA = keyM_held;
+  PVector p = null;
+  
   if (useMouseA) {
-    p = new PVector(mouseX, mouseY);
-  } else {
-    p = trackerA.smoothed;
+    // Use continuously tracked mouse position
+    p = new PVector(therapyMouseX, therapyMouseY);
+  } else if (trackerA.found && trackerA.smoothed != null) {
+    // Use camera tracking
+    p = trackerA.smoothed.copy();
   }
   
   if (p != null) {
     boolean onPath = isOnMaze(p);
+    
+    // IMPROVED: Check multiple points around the dot for camera tracking
+    if (!useMouseA && trackerA.found) {
+      float checkRadius = 12;
+      boolean top = isOnMaze(new PVector(p.x, p.y - checkRadius));
+      boolean bottom = isOnMaze(new PVector(p.x, p.y + checkRadius));
+      boolean left = isOnMaze(new PVector(p.x - checkRadius, p.y));
+      boolean right = isOnMaze(new PVector(p.x + checkRadius, p.y));
+      
+      int edgesOnPath = (top ? 1 : 0) + (bottom ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+      onPath = onPath && edgesOnPath >= 2;
+    }
+    
     if (therapyRunning) {
       statsA.trackedFrames++;
       
-      // Track previous state to detect collision events
       if (onPath) {
         statsA.onPath++;
-        statsA.wasOffPath = false; // reset flag when back on path
+        statsA.wasOffPath = false;
       } else {
-        // Only increment collision counter when first leaving the path
         if (!statsA.wasOffPath) {
           statsA.collisions++;
           statsA.wasOffPath = true;
@@ -309,7 +355,7 @@ void drawTherapy() {
     fill(onPath ? color(90, 255, 200) : color(255, 80, 120));
     ellipse(p.x, p.y, 24, 24);
     
-    // Show indicator if using mouse
+    // Show indicator
     if (useMouseA) {
       fill(255, 255, 0, 150);
       textAlign(CENTER, CENTER);
@@ -319,31 +365,42 @@ void drawTherapy() {
   } else {
     fill(255, 60, 80);
     textAlign(CENTER, CENTER);
-    text("Primary color not visible. Press M to use mouse.", width * 0.5, height * 0.45);
+    textSize(16);
+    text("Primary color not visible. Press and HOLD 'M' key, then move mouse/trackpad.", width * 0.5, height * 0.45);
   }
 
   // Player B tracking (only if enabled)
   if (playerCount > 1) {
-    // Use mouse for player 2 if camera not found OR if holding N key
-    boolean useMouseB = !trackerB.found || keyPressed && (key == 'n' || key == 'N');
-    PVector p2;
+    boolean useMouseB = keyN_held;
+    PVector p2 = null;
+    
     if (useMouseB) {
-      p2 = new PVector(mouseX, mouseY);
-    } else {
-      p2 = trackerB.smoothed;
+      p2 = new PVector(therapyMouseX, therapyMouseY);
+    } else if (trackerB.found && trackerB.smoothed != null) {
+      p2 = trackerB.smoothed.copy();
     }
     
     if (p2 != null) {
       boolean onPath2 = isOnMaze(p2);
+      
+      if (!useMouseB && trackerB.found) {
+        float checkRadius = 12;
+        boolean top = isOnMaze(new PVector(p2.x, p2.y - checkRadius));
+        boolean bottom = isOnMaze(new PVector(p2.x, p2.y + checkRadius));
+        boolean left = isOnMaze(new PVector(p2.x - checkRadius, p2.y));
+        boolean right = isOnMaze(new PVector(p2.x + checkRadius, p2.y));
+        
+        int edgesOnPath = (top ? 1 : 0) + (bottom ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+        onPath2 = onPath2 && edgesOnPath >= 2;
+      }
+      
       if (therapyRunning) {
         statsB.trackedFrames++;
         
-        // Track previous state to detect collision events
         if (onPath2) {
           statsB.onPath++;
-          statsB.wasOffPath = false; // reset flag when back on path
+          statsB.wasOffPath = false;
         } else {
-          // Only increment collision counter when first leaving the path
           if (!statsB.wasOffPath) {
             statsB.collisions++;
             statsB.wasOffPath = true;
@@ -358,7 +415,6 @@ void drawTherapy() {
       fill(onPath2 ? color(140, 255, 200) : color(255, 210, 120));
       ellipse(p2.x, p2.y, 24, 24);
       
-      // Show indicator if using mouse
       if (useMouseB) {
         fill(255, 100, 255, 150);
         textAlign(CENTER, CENTER);
@@ -368,7 +424,8 @@ void drawTherapy() {
     } else {
       fill(255, 210, 120);
       textAlign(CENTER, CENTER);
-      text("Secondary color not visible. Press N to use mouse.", width * 0.5, height * 0.55);
+      textSize(16);
+      text("Secondary color not visible. Press and HOLD 'N' key, then move mouse/trackpad.", width * 0.5, height * 0.55);
     }
   }
 
@@ -486,7 +543,7 @@ void drawShapeOver() {
 
 void drawControlScreen() {
   drawBackdrop();
-  drawBanner("Serial Control", "Primary device drives mouse + WASD/SPACE. Secondary device drives arrows/ENTER only.");
+  drawBanner("Serial Control", "Primary device (primary color) drives mouse + WASD/SPACE. Secondary device drives arrows/ENTER only. Joy remap: X>800→W, X<250→S, Y>800→D, Y<250→A.");
 
   fill(0, 0, 0, 140);
   noStroke();
@@ -617,13 +674,14 @@ void buildMaze() {
   mazeLayer.fill(255, 200, 80);
   mazeLayer.ellipse(mazeGoal.x, mazeGoal.y, mazePathWidth * 0.9, mazePathWidth * 0.9);
   mazeLayer.endDraw();
+  mazeLayer.loadPixels();
 }
 
 boolean isOnMaze(PVector p) {
-  if (p == null) return false;
-  int px = constrain(int(p.x), 0, width - 1);
-  int py = constrain(int(p.y), 0, height - 1);
-  int col = mazeLayer.get(px, py);
+  int x = constrain(int(p.x), 0, mazeLayer.width-1);
+  int y = constrain(int(p.y), 0, mazeLayer.height-1);
+
+  int col = mazeLayer.pixels[y * mazeLayer.width + x];
   return brightness(col) > 25;
 }
 
@@ -714,24 +772,16 @@ void drawTherapyHUD() {
   fill(0, 0, 0, 140);
   noStroke();
   rect(0, 0, width, 70);
-
   fill(255);
-  textAlign(LEFT, TOP);   // <--- IMPORTANT: anchor at the top-left of each text
+  textAlign(LEFT, CENTER);
   textSize(16);
-
   float elapsed = (therapyRunning ? (millis() - therapyStartMillis) / 1000.0 : statsA.timeSec);
-
-  // Move everything near top-left:
-  float tx = 25;   // left padding
-  float ty = 90;   // top padding
-
-  text("Time: " + nf(elapsed, 0, 2) + " s", tx, ty);
-  text("P1 acc: " + nf(statsA.accuracy * 100, 0, 1) + "% | col: " + statsA.collisions, tx + 150, ty);
+  text("Time: " + nf(elapsed, 0, 2) + " s", 20, 35);
+  text("P1 acc: " + nf(statsA.accuracy * 100, 0, 1) + "% | col: " + statsA.collisions, 170, 35);
   if (playerCount > 1) {
-    text("P2 acc: " + nf(statsB.accuracy * 100, 0, 1) + "% | col: " + statsB.collisions, tx + 360, ty);
+    text("P2 acc: " + nf(statsB.accuracy * 100, 0, 1) + "% | col: " + statsB.collisions, 380, 35);
   }
-
-  text("Difficulty: " + mazeDifficulty + " | Goal: reach the gold circle", tx, ty + 40);
+  text("Difficulty: " + mazeDifficulty + " | Goal: reach the gold circle", width - 300, 35);
 }
 
 String pickTherapyFact(float accuracy, float timeSec) {
@@ -930,6 +980,7 @@ void drawShapeHUD() {
   // CHANGED to show lives remaining instead of hits taken
   text("P1 (Square) lives: " + (player.maxLives - player.hits) + "/" + player.maxLives, 20, 30);
   text((playerCount > 1 ? "P2" : "CPU") + " (Pentagon) lives: " + (bot.maxLives - bot.hits) + "/" + bot.maxLives, 240, 30);
+  text("Shrinks with each hit! | P1: WASD/QE/SPACE | P2: IJKL/UO/ENTER", 520, 30);
 }
 
 // ------------------------------------------------------------
@@ -1309,6 +1360,10 @@ void keyPressed() {
   if (keyCode == DOWN) keyK = true;
   if (keyCode == LEFT) keyJ = true;
   if (keyCode == RIGHT) keyL = true;
+  
+  // ADD THESE LINES for mouse control
+  if (key == 'm' || key == 'M') keyM_held = true;
+  if (key == 'n' || key == 'N') keyN_held = true;
 
   // calibration hotkeys
   if (screen == SCREEN_CALIB && camPixels != null) {
@@ -1343,6 +1398,10 @@ void keyReleased() {
   if (keyCode == DOWN) keyK = false;
   if (keyCode == LEFT) keyJ = false;
   if (keyCode == RIGHT) keyL = false;
+  
+  // ADD THESE LINES for mouse control
+  if (key == 'm' || key == 'M') keyM_held = false;
+  if (key == 'n' || key == 'N') keyN_held = false;
 }
 
 color sampleColorAt(PVector screenPos) {
