@@ -137,34 +137,37 @@ void draw() {
   background(16, 18, 26);
   updateCameraFrame();
   updateTracking();
-  if (controlScreenEnabled) {
+
+  // --- FIX: ONLY CONTROL MOUSE ON CONTROL SCREEN ---
+  if (screen == SCREEN_CONTROL) {
     controlMouseWithTracker();
   }
 
   switch (screen) {
-  case SCREEN_HOME:
-    drawHome();
-    break;
-  case SCREEN_CALIB:
-    drawCalibration();
-    break;
-  case SCREEN_THERAPY:
-    drawTherapy();
-    break;
-  case SCREEN_THERAPY_RESULTS:
-    drawTherapyResults();
-    break;
-  case SCREEN_SHAPE:
-    drawShapeGame();
-    break;
-  case SCREEN_SHAPE_OVER:
-    drawShapeOver();
-    break;
-  case SCREEN_CONTROL:
-    drawControlScreen();
-    break;
+    case SCREEN_HOME:
+      drawHome();
+      break;
+    case SCREEN_CALIB:
+      drawCalibration();
+      break;
+    case SCREEN_THERAPY:
+      drawTherapy();
+      break;
+    case SCREEN_THERAPY_RESULTS:
+      drawTherapyResults();
+      break;
+    case SCREEN_SHAPE:
+      drawShapeGame();
+      break;
+    case SCREEN_SHAPE_OVER:
+      drawShapeOver();
+      break;
+    case SCREEN_CONTROL:
+      drawControlScreen();
+      break;
   }
 }
+
 
 void updateCameraFrame() {
   if (cam == null) return;
