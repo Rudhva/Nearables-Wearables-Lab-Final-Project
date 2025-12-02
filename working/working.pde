@@ -64,6 +64,7 @@ Tank player;
 Tank bot;
 ArrayList<Bullet> bullets = new ArrayList<Bullet>();
 ArrayList<Obstacle> obstacles = new ArrayList<Obstacle>();
+ArrayList<Splat> splats = new ArrayList<Splat>();
 boolean keyW, keyA, keyS, keyD, keyQ, keyE, keyShoot;
 boolean keyI, keyJ, keyK, keyL, keyU, keyO, keyShoot2;
 boolean shapeGameOver = false;
@@ -82,9 +83,10 @@ int lastFlexLogMs = 0;
 int joyXPrimary = 0, joyYPrimary = 0;
 int joyXSecondary = 0, joyYSecondary = 0;
 int joyDeadZone = 120;
-int mouseClickThreshold = 800;
-int fsrSpaceThreshold = 800;
-int fsrEnterThreshold = 800;
+int mouseClickThreshold1 = 1010;
+int mouseClickThreshold2 = 70;
+int fsrSpaceThreshold = 100;
+int fsrEnterThreshold = 100;
 float gyroXPrimary = 0, gyroYPrimary = 0, gyroZPrimary = 0;
 float gyroXSecondary = 0, gyroYSecondary = 0, gyroZSecondary = 0;
 float gyroTurretDeadband = 10;   // dps before we rotate turret
@@ -243,7 +245,7 @@ void drawHome() {
   drawDifficultyRow(40, 170);
   if (renderCard("Calibrate Colors", "Lock colors + choose 1P/2P", 40, 210, cardW, cardH)) screen = SCREEN_CALIB;
   if (renderCard("Therapy Maze", "Track dot through maze", 60 + cardW, 210, cardW, cardH)) startTherapyRun();
-  if (renderCard("Shape Battle", "Tanks + bullets", 40, 210 + cardH + 20, cardW, cardH)) {
+  if (renderCard("Food Fight", "Slingshots + tasty splats", 40, 210 + cardH + 20, cardW, cardH)) {
     resetShapeGame();
     screen = SCREEN_SHAPE;
   }
@@ -491,11 +493,11 @@ void drawTherapyResults() {
 
 void drawShapeGame() {
   drawBackdrop();
-  drawBanner("Shape Battle", playerCount > 1 ? "P1 vs P2: WASD/QE/SPACE vs IJKL/UO/ENTER" : "P1 vs CPU: WASD/QE/SPACE");
+  drawBanner("Food Fight", playerCount > 1 ? "P1 vs P2: WASD/QE/SPACE vs IJKL/UO/ENTER (slingshots!)" : "P1 vs CPU: WASD/QE/SPACE (slingshots!)");
   drawShapeMap();
-
+  updateSplats();
   updateShapeWorld();
-
+  drawSplats();
   drawBullets();
 
   player.draw();
@@ -515,6 +517,8 @@ void drawShapeOver() {
   // render static world without advancing state
   drawBackdrop();
   drawShapeMap();
+  updateSplats();
+  drawSplats();
   drawBullets();
   player.draw();
   bot.draw();
@@ -527,7 +531,7 @@ void drawShapeOver() {
   fill(255);
   textAlign(CENTER, CENTER);
   textSize(28);
-  text(shapeWinner + " wins!", width * 0.5, height * 0.4);
+  text(shapeWinner + " wins the food fight!", width * 0.5, height * 0.4);
   textSize(16);
   text("Press restart to play again or back to return to the menu.", width * 0.5, height * 0.48);
 
@@ -554,7 +558,7 @@ void drawControlScreen() {
   String serialStatus = "P:" + (serialPrimary != null ? "ok" : "none") + "  S:" + (serialSecondary != null ? "ok" : "none");
   text("Status: " + (controlScreenEnabled ? "ENABLED" : "DISABLED") + "  |  Serial: " + serialStatus, 60, 140);
   textSize(14);
-  text("Primary: mouse + WASD, Flex > " + mouseClickThreshold + " = mouse click, FSR > " + fsrSpaceThreshold + " = SPACE. Secondary: arrows, FSR > " + fsrEnterThreshold + " = ENTER; flex also counts for click if devices swap. Hit STOP anytime.", 60, 168, width - 120, 60);
+  text("Primary: mouse + WASD, Flex > " + mouseClickThreshold1 + " = mouse click, FSR > " + fsrSpaceThreshold + " = SPACE. Secondary: arrows, FSR > " + fsrEnterThreshold + " = ENTER; flex also counts for click if devices swap. Hit STOP anytime.", 60, 168, width - 120, 60);
 
   if (renderButton(controlScreenEnabled ? "STOP (disable input)" : "START (enable input)", width * 0.5 - 140, 320, 280, 70)) {
     controlScreenEnabled = !controlScreenEnabled;
@@ -570,7 +574,7 @@ void drawControlScreen() {
   fill(200);
   textAlign(LEFT, TOP);
   text("Primary → FSR: " + fsrPrimary + "   Flex: " + flexPrimary + "   joyX: " + joyXPrimary + "   joyY: " + joyYPrimary + "   gyroZ(adj): " + nf(gyroZPrimaryAdj, 0, 1), 60, 410);
-  text("Secondary → FSR: " + fsrSecondary + "   joyX: " + joyXSecondary + "   joyY: " + joyYSecondary + "   gyroZ(adj): " + nf(gyroZSecondaryAdj, 0, 1), 60, 436);
+  text("Secondary → FSR: " + fsrSecondary + "   Flex: " + flexSecondary + "   joyX: " + joyXSecondary + "   joyY: " + joyYSecondary + "   gyroZ(adj): " + nf(gyroZSecondaryAdj, 0, 1), 60, 436);
 
   // Back button
   if (renderButton("Back", 40, height - 70, 140, 44)) {
@@ -825,6 +829,7 @@ void initShapeGame() {
 
 void resetShapeGame() {
   bullets.clear();
+  splats.clear();
   // ADD shape parameter (0 for square, 1 for pentagon)
   player = new Tank(new PVector(width * 0.2, height * 0.5), color(90, 180, 255), true, 0);
   bot = new Tank(new PVector(width * 0.8, height * 0.5), color(255, 180, 90), false, 1);
@@ -944,11 +949,20 @@ void updateBullets() {
       b.expired = true;
       checkShapeGameOver();
     }
+
+    if (b.expired && !b.splatted) {
+      spawnSplat(b);
+      b.splatted = true;
+    }
   }
 
   for (int i = bullets.size() - 1; i >= 0; i--) {
     if (bullets.get(i).expired) bullets.remove(i);
   }
+}
+
+void spawnSplat(Bullet b) {
+  splats.add(new Splat(b.pos, b.foodColor));
 }
 
 void drawBullets() {
@@ -958,14 +972,26 @@ void drawBullets() {
   }
 }
 
+void drawSplats() {
+  for (Splat s : splats) {
+    s.draw();
+  }
+}
+
+void updateSplats() {
+  for (int i = splats.size() - 1; i >= 0; i--) {
+    if (splats.get(i).isDead()) splats.remove(i);
+  }
+}
+
 void checkShapeGameOver() {
   if (player.hits >= player.maxLives) { // CHANGED from playerMaxHits
     shapeGameOver = true;
-    shapeWinner = (playerCount > 1) ? "Player 2 (Pentagon)" : "Bot (Pentagon)"; // ADDED shape names
+    shapeWinner = (playerCount > 1) ? "Player 2 (Slinger)" : "Bot (Slinger)"; // ADDED shape names
     screen = SCREEN_SHAPE_OVER;
   } else if (bot.hits >= bot.maxLives) { // CHANGED from botMaxHits
     shapeGameOver = true;
-    shapeWinner = "Player 1 (Square)"; // ADDED shape name
+    shapeWinner = "Player 1 (Slinger)"; // ADDED shape name
     screen = SCREEN_SHAPE_OVER;
   }
 }
@@ -978,9 +1004,9 @@ void drawShapeHUD() {
   textAlign(LEFT, CENTER);
   textSize(16);
   // CHANGED to show lives remaining instead of hits taken
-  text("P1 (Square) lives: " + (player.maxLives - player.hits) + "/" + player.maxLives, 20, 30);
-  text((playerCount > 1 ? "P2" : "CPU") + " (Pentagon) lives: " + (bot.maxLives - bot.hits) + "/" + bot.maxLives, 240, 30);
-  text("Shrinks with each hit! | P1: WASD/QE/SPACE | P2: IJKL/UO/ENTER", 520, 30);
+  text("P1 slinger lives: " + (player.maxLives - player.hits) + "/" + player.maxLives, 20, 30);
+  text((playerCount > 1 ? "P2" : "CPU") + " slinger lives: " + (bot.maxLives - bot.hits) + "/" + bot.maxLives, 240, 30);
+  text("Shrinks when splatted! | P1: WASD/QE/SPACE | P2: IJKL/UO/ENTER", 520, 30);
 }
 
 // ------------------------------------------------------------
@@ -1124,10 +1150,10 @@ void handleSecondaryPacket(String[] parts) {
 }
 
 void handlePrimaryJoystickKeys() {
-  boolean joyUp = joyYPrimary > 800;
-  boolean joyDown = joyYPrimary < 250;
-  boolean joyRight = joyXPrimary > 800;
-  boolean joyLeft = joyXPrimary < 250;
+  boolean joyDown = joyYPrimary > 800;
+  boolean joyUp = joyYPrimary < 250;
+  boolean joyLeft = joyXPrimary > 800;
+  boolean joyRight = joyXPrimary < 250;
 
   // Remap: A movement drives W key; W movement drives D key; swap S/A outputs
   boolean wNew = joyRight;
@@ -1181,7 +1207,7 @@ void updateKey(boolean current, boolean desired, int keyCode) {
 void handlePrimaryMouseClick() {
   if (sysBot == null) return;
   // Allow either device's flex to click, so swapping devices still works
-  boolean shouldHold = (flexPrimary > mouseClickThreshold) || (flexSecondary > mouseClickThreshold);
+  boolean shouldHold = (flexPrimary < mouseClickThreshold1) || (flexSecondary < mouseClickThreshold2);
   if (shouldHold && !mouseHeld) {
     sysBot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
     mouseHeld = true;
@@ -1661,37 +1687,85 @@ class Tank {
   void draw() {
     pushMatrix();
     translate(pos.x, pos.y);
-    
-    // Draw glow/shadow
+
+    float baseR = radius * 0.65;
+    float midR = radius * 0.48;
+    float headR = radius * 0.36;
+    float midY = -baseR * 0.25;
+    float headY = -baseR * 0.78;
+
+    // Soft shadow to keep them grounded
     noStroke();
-    fill(0, 0, 0, 80);
-    if (shapeType == 0) { // NEW: different shapes
-      rectMode(CENTER);
-      rect(0, 0, radius * 2.2, radius * 2.2);
-      rectMode(CORNER);
-    } else {
-      polygon(0, 0, radius * 1.1, 5);
-    }
-    
-    // Draw main shape
+    fill(0, 0, 0, 40);
+    ellipse(0, baseR * 0.7, baseR * 2.6, baseR * 0.9);
+
+    // Snow body
+    color snowShade = color(210, 226, 242, 220);
+    stroke(snowShade);
+    strokeWeight(2);
+    fill(245, 250, 255);
+    ellipse(0, baseR * 0.15, baseR * 2, baseR * 2); // base
+    ellipse(0, midY, midR * 2, midR * 2);           // torso
+    ellipse(0, headY, headR * 2, headR * 2);        // head
+
+    // Scarf + drape using the player color
+    noStroke();
+    rectMode(CENTER);
     fill(body);
-    if (shapeType == 0) { // NEW: square
-      rectMode(CENTER);
-      rect(0, 0, radius * 2, radius * 2, 4);
-      rectMode(CORNER);
-    } else { // NEW: pentagon
-      polygon(0, 0, radius, 5);
-    }
-    
-    // Draw turret barrel
-    rotate(turretAngle);
-    stroke(255);
-    strokeWeight(6);
-    line(0, 0, radius + 10, 0);
-    
+    rect(0, midY + midR * 0.1, midR * 1.8, midR * 0.55, midR * 0.25);
+    rect(midR * 0.7, midY + midR * 0.45, midR * 0.65, midR * 0.45, midR * 0.2);
+    rectMode(CORNER);
+
+    // Twig arms
+    stroke(92, 72, 48);
+    strokeWeight(3);
+    line(-midR * 0.95, midY - midR * 0.05, -midR * 1.6, midY - midR * 0.35);
+    line(-midR * 1.4, midY - midR * 0.3, -midR * 1.7, midY - midR * 0.55);
+    line(midR * 0.95, midY - midR * 0.05, midR * 1.6, midY - midR * 0.35);
+    line(midR * 1.4, midY - midR * 0.3, midR * 1.7, midY - midR * 0.55);
+
+    // Buttons
+    noStroke();
+    fill(40, 60, 90, 220);
+    ellipse(0, midY - midR * 0.35, 7, 7);
+    ellipse(0, midY, 8, 8);
+    ellipse(0, midY + midR * 0.35, 7, 7);
+
+    // Eyes
+    fill(20, 36, 58, 230);
+    ellipse(-headR * 0.28, headY - headR * 0.12, 6, 6);
+    ellipse(headR * 0.28, headY - headR * 0.12, 6, 6);
+
+    // Carrot nose aims the snowball
+    PVector noseDir = new PVector(cos(turretAngle), sin(turretAngle));
+    PVector noseBase = new PVector(0, headY);
+    PVector noseTip = PVector.add(noseBase, PVector.mult(noseDir, headR * 1.25));
+    stroke(230, 120, 50);
+    strokeWeight(2);
+    fill(255, 150, 70);
+    beginShape();
+    vertex(noseBase.x - noseDir.y * 2, noseBase.y + noseDir.x * 2);
+    vertex(noseBase.x + noseDir.y * 2, noseBase.y - noseDir.x * 2);
+    vertex(noseTip.x, noseTip.y);
+    endShape(CLOSE);
+
+    // Top hat brim + crown
+    float hatW = headR * 2.1;
+    float hatH = headR * 0.9;
+    float hatY = headY - headR * 1.05;
+    fill(30, 34, 52, 240);
+    rectMode(CENTER);
+    rect(0, hatY, hatW, hatH * 0.28, 3);
+    rect(0, hatY - hatH * 0.5, hatW * 0.65, hatH, 3);
+    rectMode(CORNER);
+
+    // Frosty highlight
+    fill(255, 255, 255, 70);
+    ellipse(-midR * 0.35, midY - midR * 0.35, midR * 0.8, midR * 0.7);
+    ellipse(-headR * 0.25, headY - headR * 0.25, headR * 0.7, headR * 0.6);
+
     popMatrix();
-    
-    // Draw life indicator
+
     drawLives(); // NEW METHOD CALL
   }
   
@@ -1741,23 +1815,29 @@ class Obstacle {
   }
 }
 
-  class Bullet {
+class Bullet {
   PVector pos;
   PVector vel;
   Tank owner;
   int life = 0;
   boolean expired = false;
+  boolean splatted = false;
   int shapeType; // NEW: matches owner's shape
+  color foodColor;
+  float spin;
 
   Bullet(PVector p, PVector v, Tank o) {
     pos = p.copy();
     vel = v.copy();
     owner = o;
     shapeType = o.shapeType; // NEW
+    foodColor = lerpColor(color(230, 240, 255), o.body, 0.18);
+    spin = random(TWO_PI);
   }
 
   void update() {
     pos.add(vel);
+    spin += 0.12;
     life++;
     if (pos.x < 0 || pos.x > width || pos.y < 0 || pos.y > height) expired = true;
     if (life > 240) expired = true;
@@ -1771,20 +1851,14 @@ class Obstacle {
   void draw() {
     pushMatrix();
     translate(pos.x, pos.y);
+    rotate(spin);
     noStroke();
-    fill(owner.body);
-    
-    float size = 12;
-    if (shapeType == 0) {
-      // Square bullet
-      rectMode(CENTER);
-      rect(0, 0, size, size);
-      rectMode(CORNER);
-    } else {
-      // Pentagon bullet
-      polygon(0, 0, size * 0.7, 5);
-    }
-    
+    fill(foodColor);
+    ellipse(0, 0, 16, 16);
+    fill(255, 255, 255, 170);
+    ellipse(-4, -4, 8, 8);
+    fill(200, 220, 240, 130);
+    ellipse(4, 3, 14, 14);
     popMatrix();
   }
 }
@@ -1796,6 +1870,44 @@ class DetectionResult {
     this.bx = bx;
     this.by = by;
     this.bestDist = best;
+  }
+}
+
+class Splat {
+  PVector pos;
+  color c;
+  float[] ox = new float[4];
+  float[] oy = new float[4];
+  float[] rs = new float[4];
+  int born;
+  int lifeMs = 800;
+
+  Splat(PVector p, color col) {
+    pos = p.copy();
+    c = lerpColor(col, color(255), 0.15);
+    born = millis();
+    for (int i = 0; i < 4; i++) {
+      ox[i] = random(-10, 10);
+      oy[i] = random(-10, 10);
+      rs[i] = random(10, 20);
+    }
+  }
+
+  boolean isDead() {
+    return millis() - born > lifeMs;
+  }
+
+  void draw() {
+    float t = constrain((millis() - born) / float(lifeMs), 0, 1);
+    float alpha = lerp(200, 0, t);
+    noStroke();
+    fill(c, alpha);
+    for (int i = 0; i < 4; i++) {
+      float fade = 1.1 - 0.25 * t;
+      ellipse(pos.x + ox[i], pos.y + oy[i], rs[i] * fade, rs[i] * fade);
+    }
+    fill(255, 255, 255, alpha * 0.6);
+    ellipse(pos.x, pos.y, 8 * (1.0 - t), 8 * (1.0 - t));
   }
 }
 
